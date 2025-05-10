@@ -1,0 +1,132 @@
+const router = require("express").Router();
+const multer = require("multer");
+const { auth } = require("../controllers/auth");
+const { admin } = require("../controllers/admin");
+const Diary = require("../modals/diary");
+const fs = require("fs");
+const path = require("path");
+const logger = require("../config/logger");
+const Section = require("../modals/section");
+const { permissions } = require("../controllers/permissions");
+router.param("staffId", admin.getUserById);
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    school = `school`;
+    campus = `school/${req.school}`;
+    section = `school/${req.school}/sections`;
+    newPath = `school/${req.school}/sections/${req.section}`;
+    // school = path.join(__dirname, `../school`);
+    // campus = path.join(__dirname, `../school/${req.school}`);
+    // newPath = path.join(__dirname, `../school/${req.school}/guardian`);
+    if (fs.existsSync(newPath)) {
+      return cb(null, newPath);
+    } else {
+      if (!fs.existsSync(school)) {
+        fs.mkdirSync(school);
+        fs.mkdirSync(campus);
+        fs.mkdirSync(section);
+        fs.mkdirSync(newPath);
+      } else if (!fs.existsSync(campus)) {
+        fs.mkdirSync(campus);
+        fs.mkdirSync(section);
+        fs.mkdirSync(newPath);
+      } else if (!fs.existsSync(section)) {
+        fs.mkdirSync(section);
+        fs.mkdirSync(newPath);
+      } else {
+        fs.mkdirSync(newPath);
+      }
+      return cb(null, newPath);
+    }
+  },
+  filename: function (req, file, cb) {
+    cb(
+      null,
+      "date" +
+        "-" +
+        `${new Date(req.body.date)
+          .toLocaleDateString("en-PK", {
+            timeZone: "Asia/Karachi",
+          })
+          .split("/")
+          .join("-")}` +
+        `-${file.originalname}`
+    );
+  },
+});
+router.param("school", (req, res, next, id) => {
+  req.school = id;
+  next();
+});
+router.param("section", (req, res, next, id) => {
+  req.section = id;
+  next();
+});
+const upload = multer({ storage: storage });
+router.post(
+  "/:staffId/image/upload/:school/:section/diary",
+  auth.isSignedIn,
+  auth.isAuthenticated,
+  permissions.canUploadDiary,
+  upload.single("file"),
+  function (req, res) {
+    try {
+      logger.info(req.file, req.body);
+      if (req.file) {
+        const diary = new Diary({
+          section: req.section,
+          pic: req.file.path,
+          date: new Date(req.body.date).toLocaleDateString("en-PK", {
+            timeZone: "Asia/Karachi",
+          }),
+        });
+        diary.save((err, diary) => {
+          if (err) {
+            logger.error(req.body, err);
+            return res.status(400).json({
+              err,
+            });
+          } else {
+            Section.findOneAndUpdate(
+              { _id: req.section },
+              {
+                $set: { pic: req.file.path },
+              },
+              {
+                new: true,
+                userFindAndModify: false,
+              },
+              (err, section) => {
+                if (err) return res.status(400).json(err);
+                return res.json(section);
+              }
+            );
+          }
+        });
+        // return res.json(req.file);
+      } else {
+        return res.status(400).json({ err: "file not found" });
+      }
+    } catch (err) {
+      return res.status(500).json(err);
+    }
+  }
+);
+router.get(
+  "/:staffId/:section/allDiariesForSection",
+  auth.isSignedIn,
+  auth.isAuthenticated,
+  permissions.canGetDiary,
+  (req, res) => {
+    try {
+      Diary.find({ section: req.section }).exec((err, dairy) => {
+        if (err) return res.status(400).json(err);
+        res.json(dairy);
+      });
+    } catch (err) {
+      return res.status(500).json(err);
+    }
+  }
+);
+
+module.exports = router;
